@@ -1,0 +1,71 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: event
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5442:5432"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  web:
+    build: .
+    command: bash -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/code
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - rabbitmq
+      - redis
+
+  worker_base: &worker_defaults
+    build: .
+    command: celery -A deduplicator worker -l info
+    volumes:
+      - .:/code
+    depends_on:
+      - db
+      - rabbitmq
+      - redis
+    environment:
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+
+  worker_1:
+    <<: *worker_defaults
+  worker_2:
+    <<: *worker_defaults
+  worker_3:
+    <<: *worker_defaults
+
+  redis:
+    image: redis/redis-stack-server:latest
+    ports:
+      - "6379:6379"
+
+  init_redis:
+    build:
+      context: .
+    command: python init_redis.py
+    depends_on:
+      - redis
+
+  locust:
+    image: locustio/locust
+    volumes:
+      - ./locust:/mnt/locust
+    ports:
+      - "8089:8089"
+    command: >
+      -f /mnt/locust/locustfile.py
+      --host http://web:8000
+    depends_on:
+      - web
